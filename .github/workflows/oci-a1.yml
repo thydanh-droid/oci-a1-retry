@@ -1,13 +1,16 @@
 name: OCI A1 retry
 
 # Tu dong thu tao may Always Free Ampere A1 tren Oracle Cloud.
-# Moi gio chay 1 lan, moi lan thu lien tuc trong ~50 phut.
+# Moi lan thu lien tuc ~50 phut roi tu goi lan tiep theo; cron moi gio chi la du phong.
 # Khi da co may A1, workflow se bao LOI (dau X do) de GitHub gui email nhac ban -> vao Actions tat workflow.
 
 on:
   schedule:
     - cron: '7 * * * *'      # phut 7 moi gio (gio UTC)
   workflow_dispatch:          # cho phep bam "Run workflow" bang tay
+
+permissions:
+  actions: write             # de lan chay tu kich hoat lan chay tiep theo
 
 concurrency:
   group: oci-a1
@@ -101,6 +104,7 @@ jobs:
 
             if echo "$OUT" | grep -q '"lifecycle-state"'; then
               echo "THANH CONG sau $i lan thu!"
+              touch "$RUNNER_TEMP/da-tao-may"
               echo "## THANH CONG: da tao may A1 '$NAME'. Vao Oracle console lay Public IP." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             elif echo "$OUT" | grep -qi 'capacity'; then
@@ -116,3 +120,17 @@ jobs:
             sleep "$INTERVAL"
           done
           echo "Het thoi gian lan chay nay ($i lan thu). Lan sau se thu tiep."
+
+      # Lich cron cua GitHub hay tre/bo qua -> het gio thi tu goi lan chay tiep theo.
+      # Chi chay khi buoc tren thanh cong ma chua co may (khong chay khi da co may hoac co loi).
+      - name: Tu kich hoat lan chay tiep
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f "$RUNNER_TEMP/da-tao-may" ]; then
+            echo "Da tao duoc may, khong chay tiep."
+          else
+            gh workflow run "$GITHUB_WORKFLOW" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+            echo "Da kich hoat lan chay tiep theo."
+          fi
