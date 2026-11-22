@@ -58,6 +58,7 @@ jobs:
           T: ${{ secrets.OCI_TENANCY_OCID }}
         run: |
           set -u
+          set +e   # lenh oci tra ma loi khi het cho; tu xu ly ben duoi, khong de bash thoat
           AD=$(oci iam availability-domain list -c "$T" --query 'data[0].name' --raw-output)
           SUBNET=$(oci network subnet list -c "$T" --all \
             --query "data[?\"display-name\"=='${SUBNET_NAME}'].id | [0]" --raw-output)
