@@ -1,0 +1,117 @@
+name: OCI A1 retry
+
+# Tu dong thu tao may Always Free Ampere A1 tren Oracle Cloud.
+# Moi gio chay 1 lan, moi lan thu lien tuc trong ~50 phut.
+# Khi da co may A1, workflow se bao LOI (dau X do) de GitHub gui email nhac ban -> vao Actions tat workflow.
+
+on:
+  schedule:
+    - cron: '7 * * * *'      # phut 7 moi gio (gio UTC)
+  workflow_dispatch:          # cho phep bam "Run workflow" bang tay
+
+concurrency:
+  group: oci-a1
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    env:
+      OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+      NAME: han-ngu-app
+      SUBNET_NAME: public subnet-duythanh
+      OCPUS: "2"
+      MEM: "12"
+      BOOT_GB: "100"
+      INTERVAL: "180"
+      MAX_MINUTES: "50"
+    steps:
+      - name: Cai OCI CLI
+        run: pip install --quiet oci-cli
+
+      - name: Tao file cau hinh OCI
+        env:
+          OCI_USER: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=$OCI_USER"
+            echo "fingerprint=$OCI_FINGERPRINT"
+            echo "tenancy=$OCI_TENANCY"
+            echo "region=$OCI_REGION"
+            echo "key_file=$HOME/.oci/key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+          printf '%s\n' "$SSH_PUBLIC_KEY" > ~/ssh-key.pub
+
+      - name: Thu tao may A1
+        env:
+          T: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -u
+          AD=$(oci iam availability-domain list -c "$T" --query 'data[0].name' --raw-output)
+          SUBNET=$(oci network subnet list -c "$T" --all \
+            --query "data[?\"display-name\"=='${SUBNET_NAME}'].id | [0]" --raw-output)
+          IMAGE=$(oci compute image list -c "$T" --all \
+            --operating-system "Canonical Ubuntu" --operating-system-version "24.04" \
+            --shape VM.Standard.A1.Flex --sort-by TIMECREATED --sort-order DESC \
+            --query 'data[?!contains("display-name", `Minimal`)].id | [0]' --raw-output)
+          echo "AD=$AD"; echo "SUBNET=$SUBNET"; echo "IMAGE=$IMAGE"
+          for v in "$AD" "$SUBNET" "$IMAGE"; do
+            if [ -z "$v" ] || [ "$v" = "null" ]; then echo "::error::Thieu AD/Subnet/Image"; exit 1; fi
+          done
+
+          has_a1() {
+            oci compute instance list -c "$T" --all \
+              --query "data[?shape=='VM.Standard.A1.Flex' && (\"lifecycle-state\"=='RUNNING' || \"lifecycle-state\"=='PROVISIONING' || \"lifecycle-state\"=='STARTING')].\"display-name\"" \
+              --raw-output 2>/dev/null
+          }
+
+          EXIST=$(has_a1)
+          if [ -n "$EXIST" ] && [ "$EXIST" != "[]" ]; then
+            echo "::error::DA CO MAY A1 ($EXIST). Vao tab Actions > OCI A1 retry > ... > Disable workflow."
+            echo "## Da co may A1: $EXIST -> hay Disable workflow" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          END=$(( $(date +%s) + MAX_MINUTES * 60 ))
+          i=0
+          while [ "$(date +%s)" -lt "$END" ]; do
+            i=$((i+1))
+            OUT=$(oci compute instance launch -c "$T" \
+              --availability-domain "$AD" \
+              --shape VM.Standard.A1.Flex \
+              --shape-config "{\"ocpus\": $OCPUS, \"memoryInGBs\": $MEM}" \
+              --image-id "$IMAGE" \
+              --subnet-id "$SUBNET" \
+              --assign-public-ip true \
+              --display-name "$NAME" \
+              --boot-volume-size-in-gbs "$BOOT_GB" \
+              --ssh-authorized-keys-file "$HOME/ssh-key.pub" 2>&1)
+
+            if echo "$OUT" | grep -q '"lifecycle-state"'; then
+              echo "THANH CONG sau $i lan thu!"
+              echo "## THANH CONG: da tao may A1 '$NAME'. Vao Oracle console lay Public IP." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            elif echo "$OUT" | grep -qi 'capacity'; then
+              echo "[$(date -u '+%F %T')] Lan $i: het cho"
+            elif echo "$OUT" | grep -qi 'TooManyRequests'; then
+              echo "[$(date -u '+%F %T')] Lan $i: goi qua nhanh, cho them 120s"
+              sleep 120
+            else
+              echo "::error::Loi khac:"
+              echo "$OUT"
+              exit 1
+            fi
+            sleep "$INTERVAL"
+          done
+          echo "Het thoi gian lan chay nay ($i lan thu). Lan sau se thu tiep."
