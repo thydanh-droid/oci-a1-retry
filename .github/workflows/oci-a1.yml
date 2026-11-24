@@ -24,8 +24,8 @@ jobs:
       OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
       NAME: han-ngu-app
       SUBNET_NAME: public subnet-duythanh
-      OCPUS: "2"
-      MEM: "12"
+      OCPUS: "1"          # tam ha xuong 1/6 cho de co cho; co may roi resize len 2/12
+      MEM: "6"
       BOOT_GB: "100"
       INTERVAL: "180"
       MAX_MINUTES: "50"
